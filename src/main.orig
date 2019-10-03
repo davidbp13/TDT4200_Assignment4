@@ -10,7 +10,6 @@
 #include "libs/bitmap.h"
 #include "libs/utilities.h"
 #include "main.h"
-#include <time.h>
 
 // colourGradientSteps is defined in main.h
 // first step MUST be 0.0
@@ -32,14 +31,6 @@ static unsigned int colourMapSize = 0;
 static unsigned int res = 2048;
 static unsigned int maxDwell = 512;
 
-// New global variables
-static double limit = 4.0;
-static double complex cmin = 0 + 0 * I;
-static double complex cmax = 0 + 0 * I;
-static double realMaxMin = 0.0;
-static double imagMaxMin = 0.0;
-static double realMin = 0.0;
-static double imagMin = 0.0;
 
 pixel getDwellColour(unsigned int const y, unsigned int const x, unsigned long long const dwell) {
 	static const double log2 = 0.693147180559945309417232121458176568075500134360255254120;
@@ -48,30 +39,60 @@ pixel getDwellColour(unsigned int const y, unsigned int const x, unsigned long l
 	return colourMap[index % colourMapSize];
 }
 
-unsigned long long pixelDwell(unsigned int const y, unsigned int const x){
+
+double complex getInitialValue(double complex const cmin, double complex const cmax, unsigned int const y, unsigned int const x) {
+	double real = ((double) x / res) * creal(cmax - cmin) + creal(cmin);
+	double imag = ((double) y / res) * cimag(cmax - cmin) + cimag(cmin);
+	double complex ret = real + imag * I;
+	return ret;
+}
+
+double complex computeNextValue(double complex const z, double complex const init) {
+	return (z * z) + init;
+}
+
+bool isPartOfMandelbrot(double complex const z, double const factor) {
+	return cabs(z) < (factor * factor);
+}
+
+unsigned long long pixelDwell(double complex const cmin,
+						double complex const cmax,
+						unsigned int const y,
+						unsigned int const x)
+{
+	double complex z = getInitialValue(cmin, cmax, y, x);
+	unsigned int const dwellInc = 1;
 	unsigned long long dwell = 0;
-	double complex c = (((double) x / res) * realMaxMin + realMin) + 
-					   (((double) y / res) * imagMaxMin + imagMin) * I;
-	double complex z = c;
-	
-	while(dwell < maxDwell && cabs(z) < limit) {
-		z = (z * z) + c;
-		dwell++;
+
+	// Exit condition: dwell is maxDwell or |z| >= 4
+	while(dwell < maxDwell && isPartOfMandelbrot(z, 2.0)) {
+		// z = z² + initValue
+		z = computeNextValue(z, getInitialValue(cmin, cmax, y, x));
+		dwell += dwellInc;
 	}
+
 	return dwell;
 }
 
-void computeAndMap(unsigned long long **buffer, bmpImage *image) {
-	pixel *colour = malloc(sizeof(pixel));
-	for (unsigned int y = 0; y < res; y++) {
-		for (unsigned int x = 0; x < res; x++) {
-			*colour = getDwellColour(y, x, pixelDwell(y, x));
-			image->data[y][x].b = colour->b;
-			image->data[y][x].g = colour->g;
-			image->data[y][x].r = colour->r;			
+void computeDwellBuffer(unsigned long long **buffer, double complex cmin, double complex cmax) {
+	for (unsigned int x = 0; x < res; x++) {
+		for (unsigned int y = 0; y < res; y++) {
+			buffer[y][x] = pixelDwell(cmin, cmax, y, x);
 		}
 	}
-	free(colour);
+}
+
+void mapDwellBuffer(bmpImage *image, unsigned long long **buffer) {
+	for (unsigned int x = 0; x < res; x++) {
+		for (unsigned int y = 0; y < res; y++) {
+			pixel *colour = malloc(sizeof(pixel));
+			*colour = getDwellColour(y, x, buffer[y][x]);
+			image->data[y][x].r = colour->r;
+			image->data[y][x].g = colour->g;
+			image->data[y][x].b = colour->b;
+			free(colour);
+		}
+	}
 }
 
 void help(char const *exec, char const opt, char const *optarg) {
@@ -208,18 +229,11 @@ int main( int argc, char *argv[] )
 		}
 	}
 
-	// Auxuliar operations to calculate the complex number of the pixel
-	realMaxMin = creal(cmax - cmin);
-	imagMaxMin = cimag(cmax - cmin);
-	realMin = creal(cmin);
-	imagMin = cimag(cmin);
-
 	//Compute the dwell buffer
-	//struct timespec requestStart, requestEnd;
-	//clock_gettime(CLOCK_REALTIME, &requestStart);
-    computeAndMap(dwellBuffer,image);
-	//clock_gettime(CLOCK_REALTIME, &requestEnd);
-	//printf("Execution time for computeDwellBuffer %lf s\n",( requestEnd.tv_sec - requestStart.tv_sec ) + (double) ( requestEnd.tv_nsec - requestStart.tv_nsec ) / 1000000000);
+	computeDwellBuffer(dwellBuffer, cmin, cmax);
+
+	//Map the dwell buffer to the bmpImage with fancy colors
+	mapDwellBuffer(image, dwellBuffer);
 
 	// Save the Image
 	if(saveBmpImage(image, output)) {
@@ -244,3 +258,4 @@ exit_graceful:
 
 	return 0;
 }
+
